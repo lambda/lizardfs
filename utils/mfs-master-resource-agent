@@ -126,7 +126,7 @@ mfs_master_start() {
     # master.
     set_master_host $dummy_master
 
-    mfsmetalogger start
+    ocf_run mfsmetalogger start
 }
 
 mfs_master_stop() {
@@ -139,7 +139,7 @@ mfs_master_stop() {
             ;;
         $OCF_SUCCESS)
             ocf_log debug "trying to gracefully shutdown mfs-metalogger"
-            mfsmetalogger stop
+            ocf_run mfsmetalogger stop
             ;;
         $OCF_NOT_RUNNING)
             ocf_log info "tried to stop already stopped instance"
@@ -168,12 +168,12 @@ mfs_master_stop() {
                 $OCF_RUNNING_MASTER)
                     ocf_log warn \
                         "mfs-master not stopped after $n seconds, killing"
-                    mfsmaster kill
+                    ocf_run mfsmaster kill
                     ;;
                 $OCF_SUCCESS)
                     ocf_log warn \
                         "mfs-metalogger not stopped after $n seconds, killing"
-                    mfsmetalogger kill
+                    ocf_run mfsmetalogger kill
                     ;;
             esac
         elif [ $n -gt $max_wait ]
@@ -288,7 +288,7 @@ mfs_master_notify() {
                     ocf_log error "Failed to change master"
                     return $OCF_ERR_GENERIC
                 fi
-                if ! mfsmetaloger reload
+                if ! ocf_run mfsmetaloger reload
                 then
                     ocf_log error "Failed to reload metalogger"
                     return $OCF_ERR_GENERIC
@@ -301,7 +301,7 @@ mfs_master_notify() {
                     ocf_log error "Failed to remove master from metalogger"
                     return $OCF_ERR_GENERIC
                 fi
-                if ! mfsmetaloger reload
+                if ! ocf_run mfsmetaloger reload
                 then
                     ocf_log error "Failed to reload metalogger"
                     return $OCF_ERR_GENERIC
@@ -381,7 +381,7 @@ mfs_master_reload() {
     case $? in
         $OCF_RUNNING_MASTER)
             ocf_log debug "reloading mfs-master configuration"
-            if mfsmaster reload
+            if ocf_run mfsmaster reload
             then
                 return $OCF_SUCCESS
             else
@@ -390,7 +390,7 @@ mfs_master_reload() {
             ;;
         $OCF_SUCCESS)
             ocf_log debug "reloading mfs-metalogger configuration"
-            if mfsmetalogger reload
+            if ocf_run mfsmetalogger reload
             then
                 return $OCF_SUCCESS
             else
