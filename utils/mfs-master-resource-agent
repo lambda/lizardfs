@@ -1,0 +1,459 @@
+#!/bin/sh
+#
+#   Manages an mfs-master and mfs-metalogger master/slave resource
+#
+#   Copyright (C) 2014  EditShare LLC
+#
+#   This program is free software; you can redistribute it and/or modify
+#   it under the terms of the GNU General Public License as published by
+#   the Free Software Foundation; either version 3 of the License, or
+#   (at your option) any later version.
+#
+#   This program is distributed in the hope that it will be useful,
+#   but WITHOUT ANY WARRANTY; without even the implied warranty of
+#   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#   GNU General Public License for more details.
+#
+#   You should have received a copy of the GNU General Public License
+#   along with this program; if not, write to the Free Software Foundation,
+#   Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301  USA
+#
+#######################################################################
+#
+#   Manages mfs-master and mfs-metalogger master/slave resources.  When
+#   started as a slave, will start the metalogger.  When it receives
+#   notification of the master, will start the metalogger replicating from
+#   the given master.  When promoted to master, will stop the metalogger,
+#   restore the data into the master data, and start the master.
+#
+#######################################################################
+#
+#   TODO:
+#   - load values for data dir, etc from config file
+#   - check mfs-master and mfs-metalogger to ensure they aren't
+#     configured to start at boot
+#   - port check_dirs() from init script
+#   - once metalogger can return its sequence number, use that to
+#     set preference for which metalogger should be promoted to master
+#   - add configurable timeout for how long to wait before force
+#     killing master/metalogger
+#   - Replace only values we need to change in config file, don't
+#     overwrite the whole thing
+#   - Add support for running only in master mode (if, for instance, we're
+#     a master writing to an underlying replicated filesystem, and want to
+#     use Pacemaker to manage which node we're on), instead of requiring
+#     master/slave
+#
+#######################################################################
+
+: ${OCF_FUNCTIONS_DIR=${OCF_ROOT}/lib/heartbeat}
+. ${OCF_FUNCTIONS_DIR}/ocf-shellfuncs
+
+master_metadata=/var/lib/mfs/metadata.mfs
+metalogger_metadata=/var/lib/mfs/metadata_ml.mfs.back
+dummy_master=0.0.0.0
+
+usage() {
+cat<<EOF
+usage: $0 (start|stop|validate-all|meta-data|monitor)
+
+$0 manages a LizardFS master and metalogger resources to provide failover
+
+The 'start' operation starts the metalogger
+The 'stop' operation stops the metalogger or master
+The 'monitor' operation checks whether the master or metalogger is running
+The 'validate-all' option checks whether the configuration is valid
+EOF
+}
+
+mfs_metadata() {
+cat <<EOF
+<?xml version="1.0"?>
+<!DOCTYPE resource-agent SYSTEM "ra-api-1.dtd">
+<resource-agent name="mfs-master-resource-agent" version="0.1">
+  <version>0.1</version>
+  <longdesc lang="en">
+Manages mfs-master and mfs-metalogger master/slave resources.  When started
+as a slave, will start the metalogger.  When it receives notification of
+the master, will start the metalogger replicating from the given master.
+When promoted to master, will stop the metalogger, restore the data into
+the master data, and start the master.
+  </longdesc>
+  <shortdesc lang="en">
+Manages an mfs-master and mfs-metalogger master/slave resource
+</shortdesc>
+  <parameters>
+  </parameters>
+  <actions>
+    <action name="start"        timeout="45" />
+    <action name="stop"         timeout="45" />
+    <action name="monitor"      timeout="20"
+                                interval="10" depth="0" />
+    <action name="reload"       timeout="20" />
+    <action name="promote"      timeout="45" />
+    <action name="demote"       timeout="45" />
+    <action name="notify"       timeout="20" />
+    <action name="meta-data"    timeout="5" />
+    <action name="validate-all" timeout="5" />
+  </actions>
+</resource-agent>
+EOF
+}
+
+set_master_host() {
+    ocf_log debug "Setting master host for metalogger to $1"
+    # TODO do something better than overwriting the whole file
+    echo MASTER_HOST = $1 > /etc/mfs/metalogger.cfg
+}
+
+mfs_master_start() {
+    mfs_master_monitor
+    case $? in
+        $OCF_RUNNING_MASTER)
+            ocf_log warn "mfs-master already running"
+            return $OCF_RUNNING_MASTER
+            ;;
+        $OCF_SUCCESS)
+            ocf_log info "mfs-metalogger already running"
+            return $OCF_SUCCESS
+            ;;
+    esac
+
+    # When the start action is called, we are supposed to start in the
+    # slave state, which means starting a metalogger.  But we don't yet
+    # know which one is the correct master server.  Just connect to an
+    # invalid host for now, we will reconfigure when we learn the current
+    # master.
+    set_master_host $dummy_master
+
+    mfsmetalogger start
+}
+
+mfs_master_stop() {
+    # Stop the master, if it's running
+    mfs_master_monitor
+    case $? in
+        $OCF_RUNNING_MASTER)
+            ocf_log debug "trying to gracefully shutdown mfs-master"
+            ocf_run mfsmaster stop
+            ;;
+        $OCF_SUCCESS)
+            ocf_log debug "trying to gracefully shutdown mfs-metalogger"
+            mfsmetalogger stop
+            ;;
+        $OCF_NOT_RUNNING)
+            ocf_log info "tried to stop already stopped instance"
+            return $OCF_SUCCESS
+            ;;
+        $OCF_FAILED_MASTER)
+            ocf_log info "tried to stop failed master"
+            return $OCF_SUCCESS
+            ;;
+        *)  ocf_log error "unexpected return value from mfs_master_monitor"
+            return $OCF_ERR_GENERIC
+            ;;
+    esac
+
+    # Wait 30 seconds
+    # TODO make configurable
+    local max_wait=30
+    local n=0
+    mfs_master_monitor
+    local rc=$?
+    while [ $rc -ne $OCF_NOT_RUNNING ]
+    do
+        if [ $n -eq $max_wait ]
+        then
+            case $rc in
+                $OCF_RUNNING_MASTER)
+                    ocf_log warn \
+                        "mfs-master not stopped after $n seconds, killing"
+                    mfsmaster kill
+                    ;;
+                $OCF_SUCCESS)
+                    ocf_log warn \
+                        "mfs-metalogger not stopped after $n seconds, killing"
+                    mfsmetalogger kill
+                    ;;
+            esac
+        elif [ $n -gt $max_wait ]
+        then
+            case $rc in
+                $OCF_FAILED_MASTER)
+                    ocf_log info \
+                        "mfs-master successfully killed"
+                    return $OCF_SUCCESS
+                    ;;
+                *)
+                    ocf_log error \
+                        "unknown error killing process"
+                    return $OCF_ERR_GENERIC
+                    ;;
+            esac
+        else
+            case $rc in
+                $OCF_RUNNING_MASTER)
+                    ocf_log info \
+                        "mfs-master not stopped after $n seconds, waiting"
+                    ;;
+                $OCF_SUCCESS)
+                    ocf_log info \
+                        "mfs-metalogger not stopped after $n seconds, waiting"
+                    ;;
+                $OCF_FAILED_MASTER)
+                    ocf_log warn "mfs-master failed while trying to shut down"
+                    return $OCF_MASTER_FAILED
+                    ;;
+                *)
+                    ocf_log error \
+                        "unexpected return value from mfs_master_monitor"
+                    return $OCF_ERR_GENERIC
+                    ;;
+            esac
+        fi
+        sleep 1
+        n=$(($n+1))
+        mfs_master_monitor
+		rc=$?
+    done
+
+    return $OCF_SUCCESS
+}
+
+mfs_master_promote() {
+    mfs_master_monitor
+    case $? in
+        $OCF_RUNNING_MASTER)
+            ocf_log info "mfs-master already running"
+            return $OCF_SUCCESS
+            ;;
+        $OCF_SUCCESS)
+            ocf_log debug "mfs-metalogger running, stopping to start master"
+            if ! ocf_run mfsmetalogger stop
+            then
+                # TODO is this safe?
+                ocf_log warn \
+                    "failed to stop metalogger, will start master regardless"
+            fi
+            ;;
+        *)
+            ocf_log error \
+                "mfs-metalogger not running, not a valid target for promotion"
+            return $OCF_ERR_GENERIC
+            ;;
+    esac
+
+    if [ ! -r "$metalogger_metadata" ]
+    then
+        ocf_log error \
+            "Can't find metaloger metadata backup file $metalogger_metadata"
+        return $OCF_ERR_GENERIC
+    fi
+
+    if ! ocf_run mfsmetarestore -o "$master_metadata" \
+        -m "$metalogger_metadata" /var/lib/mfs/changelog_ml.*
+    then
+        ocf_log error \
+            "Failed to restore data from metalogger, restarting metalogger"
+        ocf_run mfsmetalogger
+        return $OCF_ERR_GENERIC
+    fi
+
+    if ! ocf_run mfsmaster start
+    then
+        ocf_log error "Failed to start mfs-master, restarting metalogger"
+        ocf_run mfsmetalogger
+        return $OCF_ERR_GENERIC
+    fi
+
+    return $OCF_SUCCESS
+}
+
+mfs_master_notify() {
+    local type_op
+    type_op="${OCF_RESKEY_CRM_meta_notify_type}-${OCF_RESKEY_CRM_meta_notify_operation}"
+
+    ocf_log debug "Received $type_op notification"
+    mfs_master_monitor
+    if [ $? -eq $OCF_SUCCESS ]
+    then
+        # We're a metalogger node
+        case $type_op in
+            pre-promote)
+                # Start replicating from the new master
+                local new_master=$OCF_RESKEY_CRM_meta_notify_promote_uname
+                ocf_log debug "Changing master to $new_master"
+                if ! set_master_host $new_master
+                then
+                    ocf_log error "Failed to change master"
+                    return $OCF_ERR_GENERIC
+                fi
+                if ! mfsmetaloger reload
+                then
+                    ocf_log error "Failed to reload metalogger"
+                    return $OCF_ERR_GENERIC
+                fi
+                ;;
+            post-demote)
+                # Master has gone away, stop trying to replicate
+                if ! set_master_host $dummy_master
+                then
+                    ocf_log error "Failed to remove master from metalogger"
+                    return $OCF_ERR_GENERIC
+                fi
+                if ! mfsmetaloger reload
+                then
+                    ocf_log error "Failed to reload metalogger"
+                    return $OCF_ERR_GENERIC
+                fi
+                ;;
+        esac
+    fi
+
+    return $OCF_SUCCESS
+}
+
+mfs_master_demote() {
+    mfs_master_monitor
+    case $? in
+        $OCF_RUNNING_MASTER)
+            ocf_log debug "mfs-master running, demoting"
+            ;;
+        $OCF_SUCCESS)
+            ocf_log info "mfs-metalogger already running"
+            return $OCF_SUCCESS
+            ;;
+        *)
+            ocf_log error \
+                "mfs-master not running, not a valid target for demotion"
+            return $OCF_ERR_GENERIC
+            ;;
+    esac
+
+    if ! ocf_run mfsmaster stop
+    then
+        ocf_log error "Failed to stop master, cannot demote"
+        return $OCF_ERR_GENERIC
+    fi
+
+    if ! ocf_run mfsmetalogger start
+    then
+        ocf_log error "Failed to start metalogger, demotion failed"
+        return $OCF_ERR_GENERIC
+    fi
+
+    return $OCF_SUCCESS
+}
+
+mfs_master_monitor() {
+    # Check if we're a master, then check if we're a slave
+
+    # TODO - possibly scrape the output to distinguish errors from the
+	# daemon running, or get the binaries to return error codes that
+    # distinguish failure from the daemon running
+    if ! ocf_run mfsmaster test
+    then
+        # mfsmaster test returns 1 if it is running, 0 otherwise
+		ocf_log debug "mfs-master is running"
+        return $OCF_RUNNING_MASTER
+    fi
+
+    if ! ocf_run mfsmetalogger test
+    then
+		ocf_log debug "mfs-metalogger is running"
+        return $OCF_SUCCESS
+    fi
+
+    # TODO make configurable
+    if [ -f /var/lib/mfs/metadata.mfs ]
+    then
+		ocf_log debug \
+			"neither daemon is running, mfs-master shutdown gracefully"
+        return $OCF_NOT_RUNNING
+    else
+		ocf_log warn "mfs-master has failed"
+        return $OCF_FAILED_MASTER
+    fi
+}
+
+mfs_master_reload() {
+    mfs_master_monitor
+    case $? in
+        $OCF_RUNNING_MASTER)
+            ocf_log debug "reloading mfs-master configuration"
+            if mfsmaster reload
+            then
+                return $OCF_SUCCESS
+            else
+                return $OCF_ERR_GENERIC
+            fi
+            ;;
+        $OCF_SUCCESS)
+            ocf_log debug "reloading mfs-metalogger configuration"
+            if mfsmetalogger reload
+            then
+                return $OCF_SUCCESS
+            else
+                return $OCF_ERR_GENERIC
+            fi
+            ;;
+        *)
+            ocf_log error "no process running to reload"
+            return $OCF_ERR_GENERIC
+            ;;
+    esac
+}
+
+mfs_master_validate() {
+    # We need to at least have the master and metalogger binaries installed
+    # for this to be able to function as an mfs-master/mfs-metalogger
+    # master/slave node.
+    check_binary mfsmaster
+    check_binary mfsmetalogger
+
+    # TODO
+    # Ensure that mfs-master and mfs-metalogger are not set to load at
+    # boot; if we're managing them via the resource agent, they should
+    # not be loaded by init
+
+	# TODO - check permissions on data dir and that we're run as
+	# appropriate user
+}
+
+if [ $# -ne 1 ]
+then
+    usage
+    exit $OCF_ERR_ARGS
+fi
+
+case "$1" in
+    meta-data)
+        mfs_metadata
+        exit $OCF_SUCCESS
+        ;;
+    usage|help)
+        usage
+        exit $OCF_SUCCESS
+        ;;
+esac
+
+# All actions besides metadata and usage must pass validation
+mfs_master_validate
+
+case "$1" in
+    start)    mfs_master_start;;
+    stop)     mfs_master_stop;;
+    monitor)  mfs_master_monitor;;
+    reload)   mfs_master_reload;;
+    promote)  mfs_master_promote;;
+    demote)   mfs_master_demote;;
+    notify)   mfs_master_notify;;
+    # We have already validated by now
+    validate-all) ;;
+    *)        usage
+              exit $OCF_ERR_UNIMPLEMENTED;;
+esac
+
+rc=$?
+ocf_log debug "${OCF_RESOURCE_INSTANCE} ${__OCF_ACTION} : $rc"
+exit $rc
