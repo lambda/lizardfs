@@ -50,7 +50,10 @@
 . ${OCF_FUNCTIONS_DIR}/ocf-shellfuncs
 
 master_metadata=/var/lib/mfs/metadata.mfs
+master_backup=/var/lib/mfs/metadata.mfs.back
+master_backup_logs=/var/lib/mfs/changelog.*.mfs
 metalogger_metadata=/var/lib/mfs/metadata_ml.mfs.back
+metalogger_metadata_logs=/var/lib/mfs/changelog_ml.*.mfs
 dummy_master=0.0.0.0
 
 usage() {
@@ -243,26 +246,49 @@ mfs_master_promote() {
             ;;
     esac
 
-    if [ ! -r "$metalogger_metadata" ]
-    then
-        ocf_log error \
-            "Can't find metaloger metadata backup file $metalogger_metadata"
-        return $OCF_ERR_GENERIC
-    fi
+    ocf_log debug "Checking for metadata to restore"
 
-    if ! ocf_run mfsmetarestore -o "$master_metadata" \
-        -m "$metalogger_metadata" /var/lib/mfs/changelog_ml.*
+    # XXX: this is wrong
+    # If Node A is master, and is either shut down gracefully or dies,
+    # and Node B is promoted to master, while Node A becomes a metalogger
+    # for B, and then Node A is later promoted to master again, node A
+    # will pick its stale master_metadata or metalogger_backup over
+    # the newer metalogger_metadata.  Instead of checking in this fixed
+    # order, we need to either pick the freshest data, or we need to
+    # structure this such that we never have more than one type of
+    # metadata present at a given time.
+    if [ -f "$master_metadata" ]
     then
-        ocf_log error \
-            "Failed to restore data from metalogger, restarting metalogger"
-        ocf_run mfsmetalogger
+        ocf_log debug "Existing master metadata intact, using it"
+    elif [ -f "$master_backup" ]
+    then
+        ocf_log info "Recovering from failed master"
+        if ! ocf_run mfsmetarestore -o "$master_metadata" \
+            -m "$master_backup" $master_backup_logs
+        then
+            ocf_log error "Failed to restore master, restarting metalogger"
+            mfs_master_start
+            return $OCF_ERR_GENERIC
+        fi
+    elif [ -f "$metalogger_metadata" ]
+    then
+        ocf_log info "Recovering from metalogger metadata"
+        if ! ocf_run mfsmetarestore -o "$master_metadata" \
+            -m "$metalogger_metadata" $metalogger_metadata_logs
+        then
+            ocf_log error "Failed to restore logs, restarting metalogger"
+            mfs_master_start
+            return $OCF_ERR_GENERIC
+        fi
+    else
+        ocf_log error "Could not find any master metadata, cannot promote"
         return $OCF_ERR_GENERIC
     fi
 
     if ! ocf_run mfsmaster start
     then
         ocf_log error "Failed to start mfs-master, restarting metalogger"
-        ocf_run mfsmetalogger
+        mfs_master_start
         return $OCF_ERR_GENERIC
     fi
 
