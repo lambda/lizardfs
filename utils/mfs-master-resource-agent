@@ -29,7 +29,6 @@
 #######################################################################
 #
 #   TODO:
-#   - load values for data dir, etc from config file
 #   - check mfs-master and mfs-metalogger to ensure they aren't
 #     configured to start at boot
 #   - port check_dirs() from init script
@@ -37,8 +36,6 @@
 #     set preference for which metalogger should be promoted to master
 #   - add configurable timeout for how long to wait before force
 #     killing master/metalogger
-#   - Replace only values we need to change in config file, don't
-#     overwrite the whole thing
 #   - Add support for running only in master mode (if, for instance, we're
 #     a master writing to an underlying replicated filesystem, and want to
 #     use Pacemaker to manage which node we're on), instead of requiring
@@ -46,15 +43,40 @@
 #
 #######################################################################
 
+
 : ${OCF_FUNCTIONS_DIR=${OCF_ROOT}/lib/heartbeat}
 . ${OCF_FUNCTIONS_DIR}/ocf-shellfuncs
 
-master_metadata=/var/lib/mfs/metadata.mfs
-master_backup=/var/lib/mfs/metadata.mfs.back
-master_backup_logs=/var/lib/mfs/changelog.*.mfs
-metalogger_metadata=/var/lib/mfs/metadata_ml.mfs.back
-metalogger_metadata_logs=/var/lib/mfs/changelog_ml.*.mfs
+
+# Parameters for this resource agent, with default values
+
+OCF_RESKEY_data_dir_default=/var/lib/mfs
+OCF_RESKEY_config_dir_default=/etc/mfs
+OCF_RESKEY_run_dir_default=${HA_VARRUN}/mfs
+OCF_RESKEY_master_cfg_default=${OCF_RESKEY_config_dir}/mfsmaster.cfg
+OCF_RESKEY_metalogger_cfg_default=${OCF_RESKEY_config_dir}/mfsmetalogger.cfg
+
+: ${OCF_RESKEY_data_dir:=$OCF_RESKEY_data_dir_default}
+: ${OCF_RESKEY_config_dir:=$OCF_RESKEY_config_dir_default}
+: ${OCF_RESKEY_run_dir:=$OCF_RESKEY_run_dir_default}
+: ${OCF_RESKEY_master_cfg:=$OCF_RESKEY_master_cfg_default}
+: ${OCF_RESKEY_metalogger_cfg:=$OCF_RESKEY_metalogger_cfg_default}
+
+
+# Convenience variables
+
+run_cfg_dir=${OCF_RESKEY_run_dir}/${OCF_RESOURCE_INSTANCE}
+master_run_cfg=${OCF_RESKEY_master_cfg_default}
+metalogger_run_cfg=${run_cfg_dir}/mfsmetalogger.cfg
+master_metadata=${OCF_RESKEY_data_dir}/metadata.mfs
+master_backup=${OCF_RESKEY_data_dir}/metadata.mfs.back
+master_backup_logs=${OCF_RESKEY_data_dir}/changelog.*.mfs
+metalogger_metadata=${OCF_RESKEY_data_dir}/metadata_ml.mfs.back
+metalogger_metadata_logs=${OCF_RESKEY_data_dir}/changelog_ml.*.mfs
 dummy_master=0.0.0.0
+
+
+# About
 
 usage() {
 cat<<EOF
@@ -86,6 +108,54 @@ the master data, and start the master.
 Manages an mfs-master and mfs-metalogger master/slave resource
 </shortdesc>
   <parameters>
+    <parameter name="data_dir" unique="1" required="0">
+      <longdesc lang="en">
+        Directorty that LizardFS will will store persistent data in; master
+        metadata, metalogger metadata, and logs.
+      </longdesc>
+      <shortdesc lang="en">
+        Persistent data directory
+      </shortdesc>
+      <content type="string" default="$OCF_RESKEY_data_dir_default"/>
+    </parameter>
+    <parameter name="config_dir" unique="1" required="0">
+      <longdesc lang="en">
+        Directory that LizardFS will find master and metalogger config files
+        in, if paths to individual config file have not been configured.
+      </longdesc>
+      <shortdesc lang="en">
+        Config file directory
+      </shortdesc>
+      <content type="string" default="$OCF_RESKEY_config_dir_default"/>
+    </parameter>
+    <parameter name="run_dir" unique="1" required="0">
+      <longdesc lang="en">
+        Directory that mfsmaster resource agent will store temporary config
+        files in, for configuration that it needs to modify at runtime.
+      </longdesc>
+      <shortdesc lang="en">
+        Runtime configuration directory
+      </shortdesc>
+      <content type="string" default="$OCF_RESKEY_run_dir_default"/>
+    </parameter>
+    <parameter name="master_cfg" unique="1" required="0">
+      <longdesc lang="en">
+        Config file for mfs-master; will find in config_dir if not specified.
+      </longdesc>
+      <shortdesc lang="en">
+        Config file for mfs-master
+      </shortdesc>
+      <content type="string" default="$OCF_RESKEY_master_cfg_default"/>
+    </parameter>
+    <parameter name="metalogger_cfg" unique="1" required="0">
+      <longdesc lang="en">
+        Config file for mfs-metalogger; will find in config_dir if not specified.
+      </longdesc>
+      <shortdesc lang="en">
+        Config file for mfs-metalogger
+      </shortdesc>
+      <content type="string" default="$OCF_RESKEY_metalogger_cfg_default"/>
+    </parameter>
   </parameters>
   <actions>
     <action name="start"        timeout="45" />
@@ -103,11 +173,44 @@ Manages an mfs-master and mfs-metalogger master/slave resource
 EOF
 }
 
-set_master_host() {
-    ocf_log debug "Setting master host for metalogger to $1"
-    # TODO do something better than overwriting the whole file
-    echo MASTER_HOST = $1 > /etc/mfs/metalogger.cfg
+
+# Utilities
+
+create_metalogger_cfg() {
+    # Usage: create_metalogger_cfg [master_host]
+
+    ocf_log debug "Configuring metalogger"
+
+    mkdir -p "$run_cfg_dir" || return $OCF_ERR_GENERIC
+    cp "$OCF_RESKEY_metalogger_cfg" "$metalogger_run_cfg" \
+        || return $OCF_ERR_GENERIC
+
+    if [ $# -ge 1 ]
+    then
+        ocf_log debug "Setting metalogger master to $1"
+        # Remove any existing configured master host from the input
+        # configuration
+        sed -e "/^[[:space:]]*MASTER_HOST[[:space:]]*=.*/d" \
+            < "$metalogger_run_cfg" > "$metalogger_run_cfg".tmp \
+            || return $OCF_ERR_GENERIC
+
+        # And add our new master host
+        echo MASTER_HOST = $1 >> "$metalogger_run_cfg".tmp \
+            || return $OCF_ERR_GENERIC
+        mv "$metalogger_run_cfg".tmp "$metalogger_run_cfg"
+    fi
 }
+
+mfs_master() {
+    mfsmaster -c "$master_run_cfg" "$@"
+}
+
+mfs_metalogger() {
+    mfsmetalogger -c "$metalogger_run_cfg" "$@"
+}
+
+
+# Actions
 
 mfs_master_start() {
     mfs_master_monitor
@@ -120,6 +223,7 @@ mfs_master_start() {
             ocf_log info "mfs-metalogger already running"
             return $OCF_SUCCESS
             ;;
+        *)  ocf_log debug "starting mfs-metalogger"
     esac
 
     # When the start action is called, we are supposed to start in the
@@ -127,9 +231,9 @@ mfs_master_start() {
     # know which one is the correct master server.  Just connect to an
     # invalid host for now, we will reconfigure when we learn the current
     # master.
-    set_master_host $dummy_master
+    create_metalogger_cfg $dummy_master || return $OCF_ERR_GENERIC
 
-    ocf_run mfsmetalogger start
+    ocf_run mfs_metalogger start
 }
 
 mfs_master_stop() {
@@ -138,11 +242,11 @@ mfs_master_stop() {
     case $? in
         $OCF_RUNNING_MASTER)
             ocf_log debug "trying to gracefully shutdown mfs-master"
-            ocf_run mfsmaster stop
+            ocf_run mfs_master stop
             ;;
         $OCF_SUCCESS)
             ocf_log debug "trying to gracefully shutdown mfs-metalogger"
-            ocf_run mfsmetalogger stop
+            ocf_run mfs_metalogger stop
             ;;
         $OCF_NOT_RUNNING)
             ocf_log info "tried to stop already stopped instance"
@@ -171,12 +275,12 @@ mfs_master_stop() {
                 $OCF_RUNNING_MASTER)
                     ocf_log warn \
                         "mfs-master not stopped after $n seconds, killing"
-                    ocf_run mfsmaster kill
+                    ocf_run mfs_master kill
                     ;;
                 $OCF_SUCCESS)
                     ocf_log warn \
                         "mfs-metalogger not stopped after $n seconds, killing"
-                    ocf_run mfsmetalogger kill
+                    ocf_run mfs_metalogger kill
                     ;;
             esac
         elif [ $n -gt $max_wait ]
@@ -232,7 +336,7 @@ mfs_master_promote() {
             ;;
         $OCF_SUCCESS)
             ocf_log debug "mfs-metalogger running, stopping to start master"
-            if ! ocf_run mfsmetalogger stop
+            if ! ocf_run mfs_metalogger stop
             then
                 # TODO is this safe?
                 ocf_log warn \
@@ -285,7 +389,7 @@ mfs_master_promote() {
         return $OCF_ERR_GENERIC
     fi
 
-    if ! ocf_run mfsmaster start
+    if ! ocf_run mfs_master start
     then
         ocf_log error "Failed to start mfs-master, restarting metalogger"
         mfs_master_start
@@ -309,12 +413,12 @@ mfs_master_notify() {
                 # Start replicating from the new master
                 local new_master=$OCF_RESKEY_CRM_meta_notify_promote_uname
                 ocf_log debug "Changing master to $new_master"
-                if ! set_master_host $new_master
+                if ! create_metlogger_cfg $new_master
                 then
                     ocf_log error "Failed to change master"
                     return $OCF_ERR_GENERIC
                 fi
-                if ! ocf_run mfsmetaloger reload
+                if ! ocf_run mfs_metalogger reload
                 then
                     ocf_log error "Failed to reload metalogger"
                     return $OCF_ERR_GENERIC
@@ -322,12 +426,12 @@ mfs_master_notify() {
                 ;;
             post-demote)
                 # Master has gone away, stop trying to replicate
-                if ! set_master_host $dummy_master
+                if ! create_metalogger_cfg $dummy_master
                 then
                     ocf_log error "Failed to remove master from metalogger"
                     return $OCF_ERR_GENERIC
                 fi
-                if ! ocf_run mfsmetaloger reload
+                if ! ocf_run mfs_metalogger reload
                 then
                     ocf_log error "Failed to reload metalogger"
                     return $OCF_ERR_GENERIC
@@ -356,13 +460,13 @@ mfs_master_demote() {
             ;;
     esac
 
-    if ! ocf_run mfsmaster stop
+    if ! ocf_run mfs_master stop
     then
         ocf_log error "Failed to stop master, cannot demote"
         return $OCF_ERR_GENERIC
     fi
 
-    if ! ocf_run mfsmetalogger start
+    if ! mfs_master_start
     then
         ocf_log error "Failed to start metalogger, demotion failed"
         return $OCF_ERR_GENERIC
@@ -377,21 +481,20 @@ mfs_master_monitor() {
     # TODO - possibly scrape the output to distinguish errors from the
 	# daemon running, or get the binaries to return error codes that
     # distinguish failure from the daemon running
-    if ! ocf_run mfsmaster test
+    if ! ocf_run -info mfs_master test
     then
         # mfsmaster test returns 1 if it is running, 0 otherwise
 		ocf_log debug "mfs-master is running"
         return $OCF_RUNNING_MASTER
     fi
 
-    if ! ocf_run mfsmetalogger test
+    if ! ocf_run -info mfs_metalogger test
     then
 		ocf_log debug "mfs-metalogger is running"
         return $OCF_SUCCESS
     fi
 
-    # TODO make configurable
-    if [ -f /var/lib/mfs/metadata.mfs ]
+    if [ -f "$master_metadata" ]
     then
 		ocf_log debug \
 			"neither daemon is running, mfs-master shutdown gracefully"
@@ -403,11 +506,17 @@ mfs_master_monitor() {
 }
 
 mfs_master_reload() {
+    # TODO - this is supposed to be used to change any dynamically
+    # reconfigurable parameters that we take.  However, all of our
+    # current paramters are not dynamically reconfigurable, they
+    # require stopping and re-starting the resource (they are marked
+    # unique), so this will never be called.
+
     mfs_master_monitor
     case $? in
         $OCF_RUNNING_MASTER)
             ocf_log debug "reloading mfs-master configuration"
-            if ocf_run mfsmaster reload
+            if ocf_run mfs_master reload
             then
                 return $OCF_SUCCESS
             else
@@ -416,7 +525,7 @@ mfs_master_reload() {
             ;;
         $OCF_SUCCESS)
             ocf_log debug "reloading mfs-metalogger configuration"
-            if ocf_run mfsmetalogger reload
+            if ocf_run mfs_metalogger reload
             then
                 return $OCF_SUCCESS
             else
@@ -465,6 +574,10 @@ esac
 
 # All actions besides metadata and usage must pass validation
 mfs_master_validate
+
+# Ensure that we have our local copy of the metalogger configuration
+# which we can modify
+create_metalogger_cfg || exit $OCF_ERR_GENERIC
 
 case "$1" in
     start)    mfs_master_start;;
