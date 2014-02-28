@@ -53,12 +53,14 @@
 OCF_RESKEY_data_dir_default=/var/lib/mfs
 OCF_RESKEY_config_dir_default=/etc/mfs
 OCF_RESKEY_run_dir_default=${HA_VARRUN}/mfs
-OCF_RESKEY_master_cfg_default=${OCF_RESKEY_config_dir}/mfsmaster.cfg
-OCF_RESKEY_metalogger_cfg_default=${OCF_RESKEY_config_dir}/mfsmetalogger.cfg
 
 : ${OCF_RESKEY_data_dir:=$OCF_RESKEY_data_dir_default}
 : ${OCF_RESKEY_config_dir:=$OCF_RESKEY_config_dir_default}
 : ${OCF_RESKEY_run_dir:=$OCF_RESKEY_run_dir_default}
+
+OCF_RESKEY_master_cfg_default=${OCF_RESKEY_config_dir}/mfsmaster.cfg
+OCF_RESKEY_metalogger_cfg_default=${OCF_RESKEY_config_dir}/mfsmetalogger.cfg
+
 : ${OCF_RESKEY_master_cfg:=$OCF_RESKEY_master_cfg_default}
 : ${OCF_RESKEY_metalogger_cfg:=$OCF_RESKEY_metalogger_cfg_default}
 
