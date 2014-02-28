@@ -108,12 +108,12 @@ the master data, and start the master.
   </longdesc>
   <shortdesc lang="en">
 Manages an mfs-master and mfs-metalogger master/slave resource
-</shortdesc>
+  </shortdesc>
   <parameters>
     <parameter name="data_dir" unique="1" required="0">
       <longdesc lang="en">
-        Directorty that LizardFS will will store persistent data in; master
-        metadata, metalogger metadata, and logs.
+Directorty that LizardFS will will store persistent data in; master
+metadata, metalogger metadata, and logs.
       </longdesc>
       <shortdesc lang="en">
         Persistent data directory
@@ -122,8 +122,8 @@ Manages an mfs-master and mfs-metalogger master/slave resource
     </parameter>
     <parameter name="config_dir" unique="1" required="0">
       <longdesc lang="en">
-        Directory that LizardFS will find master and metalogger config files
-        in, if paths to individual config file have not been configured.
+Directory that LizardFS will find master and metalogger config files
+in, if paths to individual config file have not been configured.
       </longdesc>
       <shortdesc lang="en">
         Config file directory
@@ -132,8 +132,8 @@ Manages an mfs-master and mfs-metalogger master/slave resource
     </parameter>
     <parameter name="run_dir" unique="1" required="0">
       <longdesc lang="en">
-        Directory that mfsmaster resource agent will store temporary config
-        files in, for configuration that it needs to modify at runtime.
+Directory that mfsmaster resource agent will store temporary config
+files in, for configuration that it needs to modify at runtime.
       </longdesc>
       <shortdesc lang="en">
         Runtime configuration directory
@@ -142,7 +142,7 @@ Manages an mfs-master and mfs-metalogger master/slave resource
     </parameter>
     <parameter name="master_cfg" unique="1" required="0">
       <longdesc lang="en">
-        Config file for mfs-master; will find in config_dir if not specified.
+Config file for mfs-master; will find in config_dir if not specified.
       </longdesc>
       <shortdesc lang="en">
         Config file for mfs-master
@@ -151,7 +151,7 @@ Manages an mfs-master and mfs-metalogger master/slave resource
     </parameter>
     <parameter name="metalogger_cfg" unique="1" required="0">
       <longdesc lang="en">
-        Config file for mfs-metalogger; will find in config_dir if not specified.
+Config file for mfs-metalogger; will find in config_dir if not specified.
       </longdesc>
       <shortdesc lang="en">
         Config file for mfs-metalogger
