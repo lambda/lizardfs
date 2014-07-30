@@ -320,66 +320,77 @@ create_runtime_cfg() {
     ocf_log debug "Setting up mfsmaster configuration"
 
     mkdir -p "$run_cfg_dir" || return $OCF_ERR_GENERIC
-    if ! [ -e "$master_run_cfg" ]
-    then
-        cp "$OCF_RESKEY_master_cfg" "$master_run_cfg" \
-            || return $OCF_ERR_GENERIC
-        chown "$OCF_RESKEY_user":"$OCF_RESKEY_group" "$master_run_cfg" \
-            || return $OCF_ERR_GENERIC
-    fi
 
-    replace_cfg_var "$master_run_cfg" WORKING_USER "$OCF_RESKEY_user" \
-        || return $?
-    replace_cfg_var "$master_run_cfg" WORKING_GROUP "$OCF_RESKEY_group" \
-        || return $?
-    replace_cfg_var "$master_run_cfg" DATA_PATH "$OCF_RESKEY_data_dir" \
-        || return $?
-    replace_cfg_var "$master_run_cfg" \
-        EXPORTS_FILENAME "$OCF_RESKEY_exports_cfg" \
-        || return $?
-    replace_cfg_var "$master_run_cfg" \
-        TOPOLOGY_FILENAME "$OCF_RESKEY_topology_cfg" \
-        || return $?
-    replace_cfg_var "$master_run_cfg" \
-        MATOML_LISTEN_HOST "$OCF_RESKEY_matoml_host" \
-        || return $?
-    replace_cfg_var "$master_run_cfg" \
-        MATOML_LISTEN_PORT "$OCF_RESKEY_matoml_port" \
-        || return $?
-    replace_cfg_var "$master_run_cfg" \
-        MATOCS_LISTEN_HOST "$OCF_RESKEY_matocs_host" \
-        || return $?
-    replace_cfg_var "$master_run_cfg" \
-        MATOCS_LISTEN_PORT "$OCF_RESKEY_matocs_port" \
-        || return $?
-    replace_cfg_var "$master_run_cfg" \
-        MATOCU_LISTEN_HOST "$OCF_RESKEY_matocu_host" \
-        || return $?
-    replace_cfg_var "$master_run_cfg" \
-        MATOCU_LISTEN_PORT "$OCF_RESKEY_matocu_port" \
-        || return $?
+    (
+        if ! flock -n 9
+        then
+            ocf_log err "Couldn't obtain lock on runtime config directory"
+            return $OCF_ERR_GENERIC
+        fi
 
-    if [ $# -gt 2 ]
-    then
-        ocf_log err "usage: create_runtime_cfg [<personality> [<master_host>]]"
-        return $OCF_ERR_GENERIC
-    fi
+        if ! [ -e "$master_run_cfg" ]
+        then
+            cp "$OCF_RESKEY_master_cfg" "$master_run_cfg" \
+                || return $OCF_ERR_GENERIC
+            chown "$OCF_RESKEY_user":"$OCF_RESKEY_group" "$master_run_cfg" \
+                || return $OCF_ERR_GENERIC
+        fi
 
-    if [ $# -gt 0 ]
-    then
-        personality=$1
-        ocf_log debug "Setting mfsmaster personality to '$personality'"
-        replace_cfg_var "$master_run_cfg" PERSONALITY "$personality" \
-            || return $OCF_ERR_GENERIC
-    fi
+        replace_cfg_var "$master_run_cfg" WORKING_USER "$OCF_RESKEY_user" \
+            || return $?
+        replace_cfg_var "$master_run_cfg" WORKING_GROUP "$OCF_RESKEY_group" \
+            || return $?
+        replace_cfg_var "$master_run_cfg" DATA_PATH "$OCF_RESKEY_data_dir" \
+            || return $?
+        replace_cfg_var "$master_run_cfg" \
+            EXPORTS_FILENAME "$OCF_RESKEY_exports_cfg" \
+            || return $?
+        replace_cfg_var "$master_run_cfg" \
+            TOPOLOGY_FILENAME "$OCF_RESKEY_topology_cfg" \
+            || return $?
+        replace_cfg_var "$master_run_cfg" \
+            MATOML_LISTEN_HOST "$OCF_RESKEY_matoml_host" \
+            || return $?
+        replace_cfg_var "$master_run_cfg" \
+            MATOML_LISTEN_PORT "$OCF_RESKEY_matoml_port" \
+            || return $?
+        replace_cfg_var "$master_run_cfg" \
+            MATOCS_LISTEN_HOST "$OCF_RESKEY_matocs_host" \
+            || return $?
+        replace_cfg_var "$master_run_cfg" \
+            MATOCS_LISTEN_PORT "$OCF_RESKEY_matocs_port" \
+            || return $?
+        replace_cfg_var "$master_run_cfg" \
+            MATOCU_LISTEN_HOST "$OCF_RESKEY_matocu_host" \
+            || return $?
+        replace_cfg_var "$master_run_cfg" \
+            MATOCU_LISTEN_PORT "$OCF_RESKEY_matocu_port" \
+            || return $?
 
-    if [ $# -gt 1 ]
-    then
-        master_host=$2
-        ocf_log debug "Setting master host to '$master_host'"
-        replace_cfg_var "$master_run_cfg" MASTER_HOST "$master_host" \
-            || return $OCF_ERR_GENERIC
-    fi
+        if [ $# -gt 2 ]
+        then
+            ocf_log err "usage: create_runtime_cfg [<personality> [<master_host>]]"
+            return $OCF_ERR_GENERIC
+        fi
+
+        if [ $# -gt 0 ]
+        then
+            personality=$1
+            ocf_log debug "Setting mfsmaster personality to '$personality'"
+            replace_cfg_var "$master_run_cfg" PERSONALITY "$personality" \
+                || return $OCF_ERR_GENERIC
+        fi
+
+        if [ $# -gt 1 ]
+        then
+            master_host=$2
+            ocf_log debug "Setting master host to '$master_host'"
+            replace_cfg_var "$master_run_cfg" MASTER_HOST "$master_host" \
+                || return $OCF_ERR_GENERIC
+        fi
+    ) 9> "$run_cfg_dir"/config.lock
+
+    return $?
 }
 
 mfs_master() {
