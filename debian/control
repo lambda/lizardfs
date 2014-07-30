@@ -87,7 +87,11 @@ Description: Simple CGI-capable HTTP server to run LizardFS CGI Monitor
 
 Package: lizardfs-cluster-agents
 Architecture: all
-Depends: ${shlibs:Depends}, ${misc:Depends}, lizardfs-master, lizardfs-metalogger
+Depends: ${shlibs:Depends},
+         ${misc:Depends},
+         lizardfs-master,
+         lizardfs-adm,
+         resource-agents
 Description: OCF-compliant resource agents for LizardFS
  LizardFS is a distributed filesystem.
  .
