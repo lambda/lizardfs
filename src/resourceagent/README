@@ -60,7 +60,7 @@ And later:
 
 $ crm node online machine-1
 
-Now just configure you chunk servers, cgi server, and clients to point at
+Now just configure your chunk servers, cgi server, and clients to point at
 the ClusterIP that you configured, and they should all fail over gracefully
 to the current master server, whichever that is.
 
