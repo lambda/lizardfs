@@ -169,7 +169,7 @@ multi_test() {
             ret=$?
             if [ $ret -ne $OCF_RUNNING_MASTER ]
             then
-                die "isn't running in master mode: $?"
+                die "isn't running in master mode: $ret"
             fi
         ) || die "failed to promote test_host_1"
 
@@ -180,7 +180,7 @@ multi_test() {
             ret=$?
             if [ $ret -ne $OCF_SUCCESS ]
             then
-                die "isn't running in shadow mode: $?"
+                die "isn't running in shadow mode: $ret"
             fi
         ) || die "failed to probe test_host_2"
 
@@ -192,7 +192,7 @@ multi_test() {
             ret=$?
             if [ $ret -ne $OCF_SUCCESS ]
             then
-                die "isn't running in shadow mode: $?"
+                die "isn't running in shadow mode: $ret"
             fi
         ) || die "failed to demote test_host_1"
 
@@ -224,7 +224,7 @@ multi_test() {
             ret=$?
             if [ $ret -ne $OCF_RUNNING_MASTER ]
             then
-                die "isn't running in master mode: $?"
+                die "isn't running in master mode: $ret"
             fi
         ) || die "failed to promote test_host_2"
 

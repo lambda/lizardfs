@@ -284,10 +284,10 @@ EOF
 replace_cfg_var () {
     # Usage: replace_cfg_var <config_file> <VARNAME> <value>
 
-    cfg_file=$1
-    tmp_cfg="$1".tmp
-    var=$2
-    val=$3
+    local cfg_file=$1
+    local tmp_cfg="$1".tmp
+    local var=$2
+    local val=$3
 
     # Remove our existing config line
     sed -e "/^[[:space:]]*$var[[:space:]]*=.*/d" \
@@ -297,7 +297,19 @@ replace_cfg_var () {
     # And add our replacement configuration
     echo "$var = $val" >> "$tmp_cfg" \
         || return $OCF_ERR_GENERIC
+    chown "$OCF_RESKEY_user":"$OCF_RESKEY_group" "$tmp_cfg" \
+        || return $OCF_ERR_GENERIC
     mv "$tmp_cfg" "$cfg_file" || return $OCF_ERR_GENERIC
+}
+
+read_cfg_var() {
+    # Usage: read_cfg_var <config_file> <VARNAME>
+
+    local cfg_file=$1
+    local var=$2
+    echo $(sed -e 's/[[:blank:]]*#.*$//' -n -e \
+            's/^[[:blank:]]*'$var'[[:blank:]]*=[[:blank:]]*\(.*\)$/\1/p' \
+            $cfg_file)
 }
 
 create_runtime_cfg() {
@@ -310,27 +322,40 @@ create_runtime_cfg() {
     then
         cp "$OCF_RESKEY_master_cfg" "$master_run_cfg" \
             || return $OCF_ERR_GENERIC
+        chown "$OCF_RESKEY_user":"$OCF_RESKEY_group" "$master_run_cfg" \
+            || return $OCF_ERR_GENERIC
     fi
 
-    replace_cfg_var "$master_run_cfg" WORKING_USER "$OCF_RESKEY_user"
-    replace_cfg_var "$master_run_cfg" WORKING_GROUP "$OCF_RESKEY_group"
-    replace_cfg_var "$master_run_cfg" DATA_PATH "$OCF_RESKEY_data_dir"
+    replace_cfg_var "$master_run_cfg" WORKING_USER "$OCF_RESKEY_user" \
+        || return $?
+    replace_cfg_var "$master_run_cfg" WORKING_GROUP "$OCF_RESKEY_group" \
+        || return $?
+    replace_cfg_var "$master_run_cfg" DATA_PATH "$OCF_RESKEY_data_dir" \
+        || return $?
     replace_cfg_var "$master_run_cfg" \
-        EXPORTS_FILENAME "$OCF_RESKEY_exports_cfg"
+        EXPORTS_FILENAME "$OCF_RESKEY_exports_cfg" \
+        || return $?
     replace_cfg_var "$master_run_cfg" \
-        TOPOLOGY_FILENAME "$OCF_RESKEY_topology_cfg"
+        TOPOLOGY_FILENAME "$OCF_RESKEY_topology_cfg" \
+        || return $?
     replace_cfg_var "$master_run_cfg" \
-        MATOML_LISTEN_HOST "$OCF_RESKEY_matoml_host"
+        MATOML_LISTEN_HOST "$OCF_RESKEY_matoml_host" \
+        || return $?
     replace_cfg_var "$master_run_cfg" \
-        MATOML_LISTEN_PORT "$OCF_RESKEY_matoml_port"
+        MATOML_LISTEN_PORT "$OCF_RESKEY_matoml_port" \
+        || return $?
     replace_cfg_var "$master_run_cfg" \
-        MATOCS_LISTEN_HOST "$OCF_RESKEY_matocs_host"
+        MATOCS_LISTEN_HOST "$OCF_RESKEY_matocs_host" \
+        || return $?
     replace_cfg_var "$master_run_cfg" \
-        MATOCS_LISTEN_PORT "$OCF_RESKEY_matocs_port"
+        MATOCS_LISTEN_PORT "$OCF_RESKEY_matocs_port" \
+        || return $?
     replace_cfg_var "$master_run_cfg" \
-        MATOCU_LISTEN_HOST "$OCF_RESKEY_matocu_host"
+        MATOCU_LISTEN_HOST "$OCF_RESKEY_matocu_host" \
+        || return $?
     replace_cfg_var "$master_run_cfg" \
-        MATOCU_LISTEN_PORT "$OCF_RESKEY_matocu_port"
+        MATOCU_LISTEN_PORT "$OCF_RESKEY_matocu_port" \
+        || return $?
 
     if [ $# -gt 2 ]
     then
@@ -621,7 +646,30 @@ mfs_master_monitor() {
                     # ever be promoted
                     update_master_score 1
                 fi
-                return $OCF_SUCCESS
+                local master_server=$(read_cfg_var "$master_run_cfg" MASTER_HOST)
+                : ${master_server:=$dummy_master}
+                if [ "$master_server" != "$dummy_master" ]
+                then
+                    ocf_log warn "waiting for connection to $master_server"
+                    n=5
+                    while [ $(lizardfs_probe | cut -f2) != connected ] \
+                        && [ $n -gt 0 ]
+                    do
+                        sleep 1
+                    done
+                    if [ $n -eq 0 ]
+                    then
+                        ofg_log err "timed out waiting for connection to $master_server"
+                        return $OCF_ERR_GENERIC
+                    else
+                        update_master_score 100
+                        return $OCF_SUCCESS
+                    fi
+                else
+                    # If we just have the dummy master, we just haven't been pointed
+                    # at a master server yet.
+                    return $OCF_SUCCESS
+                fi
                 ;;
             *)
                 ocf_log err \
